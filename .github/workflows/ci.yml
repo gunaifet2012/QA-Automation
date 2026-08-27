@@ -1,0 +1,213 @@
+name: OrangeHRM Automation CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'   # nightly regression at 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, staging]
+      suite:
+        description: 'Test suite to run'
+        required: true
+        default: 'smoke'
+        type: choice
+        options: [smoke, regression, parallel]
+      browser:
+        description: 'Browser'
+        required: true
+        default: 'chrome'
+        type: choice
+        options: [chrome, firefox]
+
+env:
+  JAVA_VERSION: '11'
+  MAVEN_OPTS: '-Xmx2g -XX:+TieredCompilation -XX:TieredStopAtLevel=1'
+
+jobs:
+  # ─── Job 1: Smoke Tests ────────────────────────────────────────────────────
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'smoke'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Run Smoke Tests
+        run: |
+          mvn test \
+            -DsuiteFile=src/test/resources/testng-smoke.xml \
+            -Denv=${{ github.event.inputs.env || 'dev' }} \
+            -Dbrowser=chrome \
+            -Dheadless=true
+        continue-on-error: true
+
+      - name: Upload Test Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-reports-${{ github.run_number }}
+          path: |
+            test-output/reports/
+            test-output/screenshots/
+            test-output/logs/
+          retention-days: 14
+
+  # ─── Job 2: Regression Tests (Parallel) ───────────────────────────────────
+  regression-tests:
+    name: Regression Tests (Parallel)
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'regression' || github.event.inputs.suite == 'parallel'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [auth, employee, rbac-api]
+        include:
+          - shard: auth
+            suiteClass: "com.orangehrm.tests.AuthenticationTest"
+          - shard: employee
+            suiteClass: "com.orangehrm.tests.EmployeeCreationTest,com.orangehrm.tests.EmployeeUpdateTest,com.orangehrm.tests.EmployeeDeleteTest"
+          - shard: rbac-api
+            suiteClass: "com.orangehrm.tests.RoleBasedValidationTest,com.orangehrm.tests.ApiVerificationTest"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Run Regression Shard — ${{ matrix.shard }}
+        run: |
+          mvn test \
+            -DsuiteFile=src/test/resources/testng-parallel.xml \
+            -Denv=${{ github.event.inputs.env || 'dev' }} \
+            -Dbrowser=chrome \
+            -Dheadless=true
+        continue-on-error: true
+
+      - name: Upload Shard Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-${{ matrix.shard }}-reports-${{ github.run_number }}
+          path: |
+            test-output/reports/
+            test-output/screenshots/
+          retention-days: 14
+
+  # ─── Job 3: Performance Tests (K6) ────────────────────────────────────────
+  performance-tests:
+    name: K6 Performance Tests
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install K6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | \
+            sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Run K6 Login Performance Test
+        run: |
+          k6 run performance/k6/login-test.js \
+            --out json=test-output/k6/login-results.json
+        continue-on-error: true
+
+      - name: Run K6 Employee API Performance Test
+        run: |
+          k6 run performance/k6/employee-test.js \
+            --out json=test-output/k6/employee-results.json
+        continue-on-error: true
+
+      - name: Upload K6 Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-performance-results-${{ github.run_number }}
+          path: test-output/k6/
+          retention-days: 30
+
+  # ─── Job 4: Report Aggregation ────────────────────────────────────────────
+  aggregate-reports:
+    name: Aggregate & Publish Reports
+    runs-on: ubuntu-latest
+    needs: [smoke-tests, regression-tests]
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-reports/
+
+      - name: Publish Test Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-reports-${{ github.run_number }}
+          path: all-reports/
+          retention-days: 30
+
+      - name: Post Summary to Job
+        run: |
+          echo "## Test Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run Number:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ github.event.inputs.env || 'dev' }}" >> $GITHUB_STEP_SUMMARY

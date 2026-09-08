@@ -29,14 +29,38 @@ on:
         options: [chrome, firefox]
 
 env:
-  JAVA_VERSION: '11'
+  JAVA_VERSION: '23'
   MAVEN_OPTS: '-Xmx2g -XX:+TieredCompilation -XX:TieredStopAtLevel=1'
+  DISPLAY: ':99'
 
 jobs:
+  quality-gate:
+    name: Static Analysis Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Run Checkstyle
+        run: mvn -B -DskipTests checkstyle:check
+
+      - name: Run SpotBugs
+        run: mvn -B -DskipTests compile spotbugs:check
+
   smoke-tests:
     name: Smoke Tests
     runs-on: ubuntu-latest
+    needs: quality-gate
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'smoke'
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -53,30 +77,57 @@ jobs:
         with:
           chrome-version: stable
 
+      - name: Install video dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb ffmpeg
+          mkdir -p test-output/videos
+
+      - name: Start virtual display
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+          sleep 2
+
+      - name: Start video recording
+        run: |
+          ffmpeg -y -f x11grab -video_size 1920x1080 -framerate 15 \
+            -i :99.0 -codec:v libx264 -preset ultrafast \
+            test-output/videos/smoke-${{ github.run_number }}.mp4 \
+            > /tmp/ffmpeg.log 2>&1 &
+          echo $! > /tmp/ffmpeg.pid
+
       - name: Run Smoke Tests
         run: |
           mvn test \
             -DsuiteFile=src/test/resources/testng-smoke.xml \
             -Denv=${{ github.event.inputs.env || 'dev' }} \
             -Dbrowser=${{ github.event.inputs.browser || 'chrome' }} \
-            -Dheadless=true
-        continue-on-error: true
+            -Dheadless=false
 
-      - name: Upload Test Reports
+      - name: Stop video recording
+        if: always()
+        run: |
+          if [ -f /tmp/ffmpeg.pid ]; then
+            kill -INT "$(cat /tmp/ffmpeg.pid)" || true
+            sleep 3
+          fi
+
+      - name: Upload Test Evidence
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: smoke-test-reports-${{ github.run_number }}
+          name: smoke-test-evidence-${{ github.run_number }}
           path: |
             test-output/reports/
             test-output/screenshots/
             test-output/logs/
+            test-output/videos/
           retention-days: 14
 
   regression-tests:
     name: Regression — ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    needs: smoke-tests
+    needs: [quality-gate, smoke-tests]
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'regression' || github.event.inputs.suite == 'parallel'
 
     strategy:
@@ -106,33 +157,59 @@ jobs:
         with:
           chrome-version: stable
 
+      - name: Install video dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb ffmpeg
+          mkdir -p test-output/videos
+
+      - name: Start virtual display
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+          sleep 2
+
+      - name: Start video recording
+        run: |
+          ffmpeg -y -f x11grab -video_size 1920x1080 -framerate 15 \
+            -i :99.0 -codec:v libx264 -preset ultrafast \
+            test-output/videos/regression-${{ matrix.shard }}-${{ github.run_number }}.mp4 \
+            > /tmp/ffmpeg.log 2>&1 &
+          echo $! > /tmp/ffmpeg.pid
+
       - name: Run Regression Shard — ${{ matrix.shard }}
         run: |
-          echo "Running shard: ${{ matrix.shard }}"
-          echo "Suite file: ${{ matrix.suiteFile }}"
           mvn test \
             -DsuiteFile=${{ matrix.suiteFile }} \
             -Denv=${{ github.event.inputs.env || 'dev' }} \
             -Dbrowser=${{ github.event.inputs.browser || 'chrome' }} \
-            -Dheadless=true
-        continue-on-error: true
+            -Dheadless=false
 
-      - name: Upload Shard Reports
+      - name: Stop video recording
+        if: always()
+        run: |
+          if [ -f /tmp/ffmpeg.pid ]; then
+            kill -INT "$(cat /tmp/ffmpeg.pid)" || true
+            sleep 3
+          fi
+
+      - name: Upload Shard Evidence
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: regression-${{ matrix.shard }}-reports-${{ github.run_number }}
+          name: regression-${{ matrix.shard }}-evidence-${{ github.run_number }}
           path: |
             test-output/reports/
             test-output/screenshots/
             test-output/logs/
+            test-output/videos/
           retention-days: 14
 
   performance-tests:
     name: K6 Performance Tests
     runs-on: ubuntu-latest
-    needs: smoke-tests
+    needs: quality-gate
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -145,19 +222,18 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | \
             sudo tee /etc/apt/sources.list.d/k6.list
           sudo apt-get update
-          sudo apt-get install k6
+          sudo apt-get install -y k6
 
       - name: Run K6 Login Performance Test
         run: |
+          mkdir -p test-output/k6
           k6 run performance/k6/login-test.js \
             --out json=test-output/k6/login-results.json
-        continue-on-error: true
 
       - name: Run K6 Employee API Performance Test
         run: |
           k6 run performance/k6/employee-test.js \
             --out json=test-output/k6/employee-results.json
-        continue-on-error: true
 
       - name: Upload K6 Results
         uses: actions/upload-artifact@v4
@@ -172,6 +248,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [smoke-tests, regression-tests]
     if: always()
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -180,6 +257,10 @@ jobs:
 
       - name: Publish Test Summary
         uses: actions/upload-artifact@v4
+        with:
+          name: combined-reports-${{ github.run_number }}
+          path: all-reports/
+          retention-days: 30
         with:
           name: combined-reports-${{ github.run_number }}
           path: all-reports/

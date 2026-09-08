@@ -83,4 +83,28 @@ public class RoleBasedValidationTest extends BaseTest {
         );
         log.info("Unauthenticated redirect confirmed — URL: {}", currentUrl);
     }
+    @Test(
+    groups = {"rbac", "regression"},
+    description = "Restricted user cannot access Admin module",
+    retryAnalyzer = RetryAnalyzer.class
+)
+public void testRestrictedUserCannotAccessAdminModule() {
+
+    DashboardPage dashboard = loginAs(
+            config.getRestrictedUsername(),
+            config.getRestrictedPassword()
+    );
+
+    Assert.assertTrue(
+            dashboard.isDashboardDisplayed(),
+            "Restricted user should successfully login"
+    );
+
+    Assert.assertFalse(
+            dashboard.isAdminMenuDisplayed(),
+            "Restricted user should not see the Admin module"
+    );
+
+    log.info("Restricted role validation passed: Admin module is not accessible");
+}
 }

@@ -62,24 +62,43 @@ public class PIMPage extends BasePage {
     }
 
     public EmployeePage openEmployeeByName(String fullName) {
-        log.info("Opening employee profile: {}", fullName);
-        By editLink = By.xpath("//div[@class='oxd-table-cell oxd-padding-cell'][3]//p[text()='" + fullName + "']/../../following-sibling::div//button[@title='Edit']");
+        By editLink = By.xpath("//div[@class='oxd-table-cell oxd-padding-cell'][3]//p[text()='"
+                + fullName + "']/../../following-sibling::div//button[@title='Edit']");
         click(editLink);
         return new EmployeePage(driver);
     }
 
     public EmployeePage openFirstEmployeeInList() {
-        By firstEditButton = By.cssSelector(".oxd-table-body .oxd-table-row:first-child button[title='Edit']");
+        By firstEditButton = By.cssSelector(
+                ".oxd-table-body .oxd-table-row:first-child button[title='Edit']");
         click(firstEditButton);
         return new EmployeePage(driver);
     }
 
     public void deleteEmployeeByName(String fullName) {
-        log.info("Deleting employee: {}", fullName);
-        By deleteButton = By.xpath("//p[text()='" + fullName + "']/ancestor::div[@class='oxd-table-row oxd-table-row--with-border']//button[@title='Delete']");
+        By deleteButton = By.xpath("//p[text()='" + fullName
+                + "']/ancestor::div[@class='oxd-table-row oxd-table-row--with-border']"
+                + "//button[@title='Delete']");
         click(deleteButton);
         click(PIMPageObjects.CONFIRM_DELETE_BUTTON);
         waitForSuccessToast();
+    }
+
+    public boolean deleteEmployeeByIdIfPresent(String employeeId) {
+        searchByEmployeeId(employeeId);
+
+        List<WebElement> rows = driver.findElements(
+                By.cssSelector(".oxd-table-body .oxd-table-row"));
+
+        if (rows.isEmpty() || isNoRecordsFound()) {
+            return false;
+        }
+
+        click(By.cssSelector(
+                ".oxd-table-body .oxd-table-row:first-child button[title='Delete']"));
+        click(PIMPageObjects.CONFIRM_DELETE_BUTTON);
+        waitForSuccessToast();
+        return true;
     }
 
     public void deleteAllSelectedEmployees() {
@@ -89,7 +108,9 @@ public class PIMPage extends BasePage {
     }
 
     public void selectEmployeeCheckboxByName(String fullName) {
-        By checkbox = By.xpath("//p[text()='" + fullName + "']/ancestor::div[@class='oxd-table-row oxd-table-row--with-border']//input[@type='checkbox']");
+        By checkbox = By.xpath("//p[text()='" + fullName
+                + "']/ancestor::div[@class='oxd-table-row oxd-table-row--with-border']"
+                + "//input[@type='checkbox']");
         click(checkbox);
     }
 

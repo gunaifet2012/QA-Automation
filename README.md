@@ -8,7 +8,7 @@ End-to-end test automation framework for the [OrangeHRM](https://opensource-demo
 
 | Layer | Technology |
 |---|---|
-| Language | Java 11 |
+| Language | Java 23 |
 | Test Runner | TestNG 7.9 |
 | Browser Automation | Selenium 4.18 |
 | Driver Management | WebDriverManager 5.7 |

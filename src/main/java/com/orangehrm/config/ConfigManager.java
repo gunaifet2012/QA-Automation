@@ -77,6 +77,13 @@ public class ConfigManager {
     public String getAdminPassword() {
         return get("admin.password");
     }
+    public String getRestrictedUsername() {
+    return get("restricted.username");
+}
+
+public String getRestrictedPassword() {
+    return get("restricted.password");
+}
 
     public int getExplicitWait() {
         return getInt("explicit.wait.seconds");

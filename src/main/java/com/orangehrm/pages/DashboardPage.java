@@ -41,4 +41,12 @@ public class DashboardPage extends BasePage {
     public String getPageTitle() {
         return getText(DashboardPageObjects.DASHBOARD_HEADER);
     }
+    
+    public boolean isAdminMenuDisplayed() {
+    return isDisplayed(DashboardPageObjects.SIDEBAR_ADMIN);
+    }
+    
+    public boolean isPIMMenuDisplayed() {
+    return isDisplayed(DashboardPageObjects.SIDEBAR_PIM);
+    }
 }
